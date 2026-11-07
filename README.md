@@ -1,4 +1,108 @@
-# FixOurTime
+# Fix Our Time
+
+> 무너진 시간을 되돌리기 위해 시계 바늘을 되찾아 나가는 스팀펑크 **2D 클라이밍 플랫포머**
+
+이 저장소는 팀 프로젝트 원본 [GodKong2431/FixOurTime](https://github.com/GodKong2431/FixOurTime)을 포크한 저장소입니다.
+위쪽은 제가(권영진) 맡은 작업 정리이고, 아래쪽은 팀 원본 README입니다.
+
+- PV 영상 : https://youtu.be/8mHlGQNQNmQ
+- 개발기 (블로그) : https://trew202.tistory.com/99
+
+<br>
+
+## 1. 프로젝트 개요
+
+| 항목 | 내용 |
+|------|------|
+| 장르 | 2D · 플랫포머 · 클라이밍 |
+| 플랫폼 | PC |
+| 팀 | 오리무중 (개발 4명 · 기획 6명) |
+| 개발 기간 | 2025.12.11 ~ 2026.01.02 (주말 제외 약 3주) |
+| 엔진 / 언어 | Unity 6000.2 (URP) / C# |
+| 협업 | GitHub (Git Issues 태스크 관리), Notion, Daily Scrum (하루 2회) |
+| 내 역할 | 플레이어 핵심 로직, 매니저 · 세이브 · 카메라, 셰이더 · 연출, UI 연동 |
+
+<br>
+
+## 2. 담당 작업 상세
+
+### 2.1 FSM 기반 플레이어 시스템
+- `IState<T>` 제네릭 인터페이스를 직접 설계하고, 플레이어 행동을 `Idle / Move / Jump / Fall / Charge / Attack / DashAttack / Hit / Stun / Dead` **10개 상태**로 분리
+- 각 상태가 `Enter / Execute / Exit` 를 스스로 담당해 입력 충돌과 상태 전환 복잡도를 줄임
+- 기존 `IPlayerState` 에서 제네릭 `IState<Player>` 로 **19개 파일을 일괄 리팩토링**해 플레이어뿐 아니라 보스 · 기믹(BookCase 등)에도 같은 패턴을 쓸 수 있게 함
+
+> **왜 상태 패턴인가** — If-Else 방식은 액션이 늘어날수록 기존 코드를 계속 고쳐야 합니다. 상태를 독립 클래스로 나누면 새 상태를 만들고 연결만 하면 되고(개방-폐쇄 원칙), 상태가 바뀔 때 할 초기화 · 정리 작업도 생명주기에서 안전하게 처리됩니다.
+
+### 2.2 피격 · 데미지 · 물리
+- `IDamageable` 인터페이스(`TakeDamage(damage, knockbackForce, hitPos)`)로 플레이어 · 보스 · 함정 · 아이템이 **같은 방식으로 피격**을 처리
+- 넉백 수치가 0보다 클 때만 `HitState` 로 전환, 속도 초기화 → 가속 중단 → 방향 계산 → 상태 전환 순서를 정리
+- 사망 · 부활은 `InvokeDeadEvent()` / `OnPlayerRespawn` UnityEvent로 외부 시스템과 느슨하게 연결
+- `BouncinessMaterial` · `FullFrictionMaterial` 을 상황에 따라 교체해 점프 · 대시 중 벽 튕김과 착지 마찰 처리
+- Raycast 단일 체크를 **BoxCast 지형 판정**으로 바꿔 모서리 지형 오류 수정, 판정 거리 · 크기를 Prefab에서 조정 가능하게 노출
+
+### 2.3 버프 · 디버프 연동
+- `List<IDebuff<Player>>` 활성 디버프 리스트를 플레이어에 통합해 HotDebuff · ColdDebuff 같은 환경 디버프와 플레이어 상태를 연결
+
+### 2.4 JSON 세이브 · 체크포인트
+- 위치 좌표 · 체력 · 씬 · 카메라 위치 · 수집 아이템 · 세이브 포인트 목록처럼 여러 타입을 저장해야 해서 **계층 구조 표현이 유리한 JSON** 선택
+- 이름 기반이던 세이브 포인트 식별을 `_savePointID` **고유 ID 방식**으로 바꾸고, stage1~stage4에 8개 세이브 포인트 등록
+- 재접속 시 이미 밟은 포인트만 정확히 비활성화되도록 `SavePoint.cs` 리팩토링, `GameData.cs` 에 상태 필드 추가
+
+> **확장성** — 업데이트나 기획 변경으로 저장 요소가 늘어도 JSON 스키마에 필드만 추가하면 됩니다.
+
+### 2.5 싱글톤 매니저 · Init 씬
+- `GameManager` 를 `SingleTon<GameManager>` 로 전환해 씬 전환 후에도 유지
+- Game · Scene · Sound · Cinemachine 매니저를 `DontDestroyOnLoad` 싱글톤으로 구축
+- **Init 씬**에서 인트로 영상과 전체 매니저를 한 번에 생성 · 초기화해 씬 전환 때 생기는 참조 오류 방지
+- 타이틀 씬에 `GameManager` · `SceneChanger` · `EventSystem` 을 배치하고 뉴게임 버튼 연결 방식 교체
+
+### 2.6 Shader Graph 이펙트 · 카메라 연출
+- **블랙홀 이펙트** : UV Distortion과 Voronoi Noise를 조합해 주변이 빨려 들어가는 굴절 효과로 보스 스킬 표현
+- **아웃라인** : 플레이어 차지 상태와 주요 함정의 현재 상태를 외곽선으로 표시
+- Stage1 보스 등장 시 `CinemachinCamManager.ShakeTargetCamera()` 로 카메라 흔들림, 강도 · 주파수 · 지속 시간을 Inspector에서 조정
+
+### 2.7 인게임 UI
+- 일시정지 사운드 설정 패널 프리팹을 만들어 stage1~stage4에 일괄 적용
+- 뉴게임 · 타이틀 복귀 확인 팝업 연결, Canvas 프리팹에 TMP 텍스트 · 버튼 추가와 앵커 조정
+
+<br>
+
+## 3. 트러블 슈팅
+
+| 문제 | 상황 | 해결 |
+|------|------|------|
+| 매니저끼리 직접 참조해 하나를 고치면 연쇄 오류 발생 | 마감 직전이라 전체 리팩토링은 위험 | 외부 호출을 UnityEvent로 바꿔 결합도를 낮춤. 이후 DI와 싱글톤 남용 줄이기를 과제로 정리 |
+| 게임 로드 때 Cinemachine 카메라가 위아래로 튐 | 마감 4일 전, 카메라 로직을 크게 고치면 안정성 위험 | **페이크 로딩** 연출로 로딩 동안 카메라가 안정되게 처리 → 유저에게는 의도된 로딩으로 보임 |
+
+<br>
+
+## 4. 기술 스택 (담당 부분)
+
+| 분류 | 기술 |
+|------|------|
+| 엔진 | Unity 6000.2 (URP) |
+| 언어 | C# |
+| 물리 | Rigidbody2D, PhysicsMaterial2D, BoxCast |
+| 카메라 | Cinemachine 3.1.5 |
+| 연출 | Shader Graph (블랙홀 · 아웃라인) |
+| UI | Unity UI, TextMeshPro |
+| 입력 | Unity Input System |
+| 저장 | JsonUtility, Application.persistentDataPath |
+| 패턴 | State (FSM), Interface, Singleton, Observer (UnityEvent) |
+| 협업 | Git, GitHub (기능 브랜치 → Develop 머지) |
+
+<br>
+
+## 5. 회고
+- **만족스러운 점** : 기획된 기능을 기한 안에 모두 구현했고, 셰이더와 Cinemachine으로 연출 완성도를 높였습니다.
+- **배운 점** : 첫 설계가 프로젝트 전체의 유지보수 비용을 결정한다는 것을 배웠습니다.
+- **다음 과제** : 플레이어 클래스에 몰린 기능을 단일 책임 원칙(SRP)에 맞게 더 나누는 연습을 하려고 합니다.
+
+<br>
+
+---
+
+# 팀 프로젝트 README (원본)
 
 FixOurTime은 무너진 시간을 되돌리기 위해 시계 바늘을 되찾아 나가는 2D 액션 플랫폼 프로젝트입니다. 현재 프로젝트는 2D 플랫폼 액션, 스테이지별 보스전과 함정 기믹, CSV 기반 데이터 파이프라인, JSON 기반 체크포인트 저장, Cinemachine 기반 카메라 연출, VideoPlayer 기반 컷신 흐름을 중심으로 구성되어 있습니다.
 
